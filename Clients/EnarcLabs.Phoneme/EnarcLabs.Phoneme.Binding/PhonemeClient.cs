@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Windows;
@@ -52,7 +53,7 @@ namespace EnarcLabs.Phoneme.Binding
             _udpClient = new UdpClient(networkPort, AddressFamily.InterNetwork)
             {
                 EnableBroadcast = true,
-                MulticastLoopback = false,
+                MulticastLoopback = true,
             };
             _tcpListener = new TcpListener(IPAddress.Any, networkPort);
             _knownPeersSet = new HashSet<PhonemePeer>();
@@ -94,7 +95,24 @@ namespace EnarcLabs.Phoneme.Binding
                     bin.Write(PublicKey);
 
                     mem.Position = 0;
-                    _udpClient.Send(mem.ToArray(), (int)mem.Length, new IPEndPoint(IPAddress.Broadcast, NetworkPort));
+                    //Broadcast on every interface, not just the default one.
+                    foreach (var multicastAddress in NetworkInterface.GetAllNetworkInterfaces()
+                        .Where(x => x.OperationalStatus == OperationalStatus.Up && x.SupportsMulticast &&
+                                    x.GetIPProperties().GetIPv4Properties() != null &&
+                                    NetworkInterface.LoopbackInterfaceIndex !=
+                                    x.GetIPProperties().GetIPv4Properties().Index)
+                        .SelectMany(x => x.GetIPProperties().UnicastAddresses).Select(x => x.Address)
+                        .Where(x => x.AddressFamily == AddressFamily.InterNetwork))
+                    {
+                        using (var bClient = new UdpClient(new IPEndPoint(multicastAddress, 0)))
+                        {
+                            bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+                            bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.DontRoute, 1);
+
+                            _udpClient.Send(mem.ToArray(), (int) mem.Length,
+                                new IPEndPoint(IPAddress.Broadcast, NetworkPort));
+                        }
+                    }
                 }
             }
         }
@@ -114,25 +132,38 @@ namespace EnarcLabs.Phoneme.Binding
             using (var socket = _tcpListener.EndAcceptSocket(result))
             using (var stream = new NetworkStream(socket))
             {
-                var bin = new BinaryReader(stream);
-                switch ((PeerCommand)bin.ReadByte())
+                var rdr = new BinaryReader(stream);
+                var wrt = new BinaryWriter(stream);
+                switch ((PeerCommand)rdr.ReadByte())
                 {
                     case PeerCommand.Identify:
                     {
                         var pub = ReadAndVerifyPublicKey(stream);
                         if(pub == null)
                             return;
-                        var peer = new PhonemePeer(this, pub, socket.RemoteEndPoint as IPEndPoint);
+                        var peer = new PhonemePeer(this, pub, new IPEndPoint((socket.RemoteEndPoint as IPEndPoint).Address, NetworkPort));
                         if (!_knownPeersSet.Contains(peer))
                         {
                             _knownPeersSet.Add(peer);
                             Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
+                            PeerJoin?.Invoke(peer);
                         }else
                             peer = _knownPeersSet.First(x => x.Equals(peer));
 
-                        peer.DisplayName = bin.ReadBoolean() ? bin.ReadString() : null;
-                        if (bin.ReadBoolean())
-                            bin.ReadBytes(bin.ReadInt32());
+                        peer.DisplayName = rdr.ReadBoolean() ? rdr.ReadString() : null;
+                        if (rdr.ReadBoolean())
+                            rdr.ReadBytes(rdr.ReadInt32());
+
+                        wrt.Write(DisplayName != null);
+                        if(DisplayName != null)
+                            wrt.Write(DisplayName);
+                        wrt.Write(ProfilePicture != null);
+                        if (ProfilePicture != null)
+                        {
+                            wrt.Write(ProfilePicture.Length);
+                            wrt.Write(ProfilePicture);
+                        }
+
 
                         break;
                     }
@@ -142,12 +173,12 @@ namespace EnarcLabs.Phoneme.Binding
                         if (pub == null)
                             return;
 
-                        var peer = new PhonemePeer(this, pub, socket.RemoteEndPoint as IPEndPoint);
+                        var peer = new PhonemePeer(this, pub, new IPEndPoint((socket.RemoteEndPoint as IPEndPoint).Address, NetworkPort));
                         if (!_knownPeersSet.Contains(peer))
                             return;
                         peer = _knownPeersSet.First(x => x.GetHashCode() == peer.GetHashCode());
 
-                        var blob = bin.ReadBytes(bin.ReadInt32());
+                        var blob = rdr.ReadBytes(rdr.ReadInt32());
                         using (var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
                             peer.OnMessageRecieved(rsa.Decrypt(blob, false));
 

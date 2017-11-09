@@ -52,19 +52,26 @@ namespace EnarcLabs.Phoneme.Binding
                 client.Connect(EndPoint);
                 using (var stream = client.GetStream())
                 {
-                    var bin = new BinaryWriter(stream);
-                    bin.Write((byte)PeerCommand.Identify);
+                    var rdr = new BinaryReader(stream);
+                    var wrt = new BinaryWriter(stream);
+                    wrt.Write((byte)PeerCommand.Identify);
 
                     WriteSignedPublicKey(stream);
 
-                    bin.Write(Client.DisplayName != null);
+                    wrt.Write(Client.DisplayName != null);
                     if(Client.DisplayName != null)
-                        bin.Write(Client.DisplayName);
-                    bin.Write(Client.ProfilePicture != null);
-                    if (Client.ProfilePicture == null) return;
+                        wrt.Write(Client.DisplayName);
+                    wrt.Write(Client.ProfilePicture != null);
+                    if (Client.ProfilePicture != null)
+                    {
 
-                    bin.Write(Client.ProfilePicture.Length);
-                    bin.Write(Client.ProfilePicture);
+                        wrt.Write(Client.ProfilePicture.Length);
+                        wrt.Write(Client.ProfilePicture);
+                    }
+
+                    DisplayName = rdr.ReadBoolean() ? rdr.ReadString() : null;
+                    if (rdr.ReadBoolean())
+                        rdr.ReadBytes(rdr.ReadInt32());
                 }
             }
         }
@@ -81,7 +88,7 @@ namespace EnarcLabs.Phoneme.Binding
 
                     WriteSignedPublicKey(stream);
 
-                    using (var rsa = OpenSslKey.DecodeRsaPrivateKey(Client.PrivateKey))
+                    using (var rsa = OpenSslKey.DecodeX509PublicKey(PublicKey))
                     {
                         var data = rsa.Encrypt(messageData, false);
                         bin.Write(data.Length);
