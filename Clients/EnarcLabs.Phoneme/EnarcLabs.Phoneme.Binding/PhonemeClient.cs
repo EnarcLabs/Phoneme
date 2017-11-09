@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -7,11 +8,13 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
-using System.Text;
+using System.Windows;
 using EnarcLabs.Phoneme.Binding.Security;
 
 namespace EnarcLabs.Phoneme.Binding
 {
+    public delegate void PeerJoinHandler(PhonemePeer peer);
+
     public class PhonemeClient : IDisposable
     {
         private readonly UdpClient _udpClient;
@@ -36,6 +39,7 @@ namespace EnarcLabs.Phoneme.Binding
         /// </summary>
         public int NetworkPort { get; }
 
+        private readonly HashSet<PhonemePeer> _knownPeersSet;
         public ObservableCollection<PhonemePeer> KnownPeers { get; }
 
         public PhonemeClient(int networkPort, byte[] publicKey, byte[] privateKey, string displayName = null, byte[] profilePicture = null)
@@ -51,6 +55,7 @@ namespace EnarcLabs.Phoneme.Binding
                 MulticastLoopback = false,
             };
             _tcpListener = new TcpListener(IPAddress.Any, networkPort);
+            _knownPeersSet = new HashSet<PhonemePeer>();
             KnownPeers = new ObservableCollection<PhonemePeer>();
             NetworkPort = networkPort;
             PublicKey = publicKey;
@@ -96,7 +101,15 @@ namespace EnarcLabs.Phoneme.Binding
 
         private void TcpAcceptLoop(IAsyncResult result)
         {
-            _tcpListener.BeginAcceptSocket(TcpAcceptLoop, null);
+            try
+            {
+                _tcpListener.BeginAcceptSocket(TcpAcceptLoop, null);
+            }
+            catch
+            {
+                //Called when disposed
+                return;
+            }
 
             using (var socket = _tcpListener.EndAcceptSocket(result))
             using (var stream = new NetworkStream(socket))
@@ -110,11 +123,14 @@ namespace EnarcLabs.Phoneme.Binding
                         if(pub == null)
                             return;
                         var peer = new PhonemePeer(this, pub, socket.RemoteEndPoint as IPEndPoint);
-                        var idx = Enumerable.Range(0, KnownPeers.Count).Cast<int?>().FirstOrDefault(x => KnownPeers[x ?? 0].GetHashCode() == peer.GetHashCode());
-                        if (!idx.HasValue) return;
+                        if (!_knownPeersSet.Contains(peer))
+                        {
+                            _knownPeersSet.Add(peer);
+                            Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
+                        }else
+                            peer = _knownPeersSet.First(x => x.Equals(peer));
 
-                        peer = KnownPeers[idx.Value];
-                            peer.DisplayName = bin.ReadBoolean() ? bin.ReadString() : null;
+                        peer.DisplayName = bin.ReadBoolean() ? bin.ReadString() : null;
                         if (bin.ReadBoolean())
                             bin.ReadBytes(bin.ReadInt32());
 
@@ -125,14 +141,15 @@ namespace EnarcLabs.Phoneme.Binding
                         var pub = ReadAndVerifyPublicKey(stream);
                         if (pub == null)
                             return;
-                        var peer = new PhonemePeer(this, pub, socket.RemoteEndPoint as IPEndPoint);
-                        var idx = Enumerable.Range(0, KnownPeers.Count).Cast<int?>().FirstOrDefault(x => KnownPeers[x ?? 0].GetHashCode() == peer.GetHashCode());
-                        if (!idx.HasValue) return;
 
-                        peer = KnownPeers[idx.Value];
+                        var peer = new PhonemePeer(this, pub, socket.RemoteEndPoint as IPEndPoint);
+                        if (!_knownPeersSet.Contains(peer))
+                            return;
+                        peer = _knownPeersSet.First(x => x.GetHashCode() == peer.GetHashCode());
+
                         var blob = bin.ReadBytes(bin.ReadInt32());
-                        using(var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
-                            Console.WriteLine("{0}: {1}", peer.DisplayName ?? peer.EndPoint.ToString(), Encoding.ASCII.GetString(rsa.Decrypt(blob, false)));
+                        using (var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
+                            peer.OnMessageRecieved(rsa.Decrypt(blob, false));
 
                         break;
                     }
@@ -142,7 +159,7 @@ namespace EnarcLabs.Phoneme.Binding
             }
         }
 
-        private byte[] ReadAndVerifyPublicKey(Stream stream)
+        private static byte[] ReadAndVerifyPublicKey(Stream stream)
         {
             var bin = new BinaryReader(stream);
 
@@ -155,7 +172,15 @@ namespace EnarcLabs.Phoneme.Binding
 
         private void UdpRecieveLoop(IAsyncResult result)
         {
-            _udpClient.BeginReceive(UdpRecieveLoop, null);
+            try
+            {
+                _udpClient.BeginReceive(UdpRecieveLoop, null);
+            }
+            catch
+            {
+                //On disposed
+                return;
+            }
 
             IPEndPoint remote = null;
             var data = _udpClient.EndReceive(result, ref remote);
@@ -173,12 +198,16 @@ namespace EnarcLabs.Phoneme.Binding
                 {
                     if (!rsa.VerifyData(pubKey, new SHA256CryptoServiceProvider(), sig)) return;
 
-                    //if(pubKey.Compare(PublicKey))
-                        //return;
+                    if(pubKey.Compare(PublicKey))
+                        return;
 
                     var peer = new PhonemePeer(this, pubKey, remote);
-                    if(KnownPeers.All(x => x.GetHashCode() != peer.GetHashCode()))
-                        KnownPeers.Add(peer);
+                    if (!_knownPeersSet.Contains(peer))
+                    {
+                        _knownPeersSet.Add(peer);
+                        Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
+                        PeerJoin?.Invoke(peer);
+                    }
                     peer.PerformTcpHandshake();
                 }
             }
@@ -187,6 +216,10 @@ namespace EnarcLabs.Phoneme.Binding
         
         public void Dispose()
         {
+            _udpClient?.Close();
+            _tcpListener?.Stop();
         }
+
+        public event PeerJoinHandler PeerJoin;
     }
 }

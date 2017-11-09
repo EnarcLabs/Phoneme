@@ -9,6 +9,8 @@ using EnarcLabs.Phoneme.Binding.Security;
 
 namespace EnarcLabs.Phoneme.Binding
 {
+    public delegate void PeerMessageHandler(PhonemePeer source, byte[] data);
+
     public class PhonemePeer : INotifyPropertyChanged
     {
         public PhonemeClient Client { get; }
@@ -108,6 +110,10 @@ namespace EnarcLabs.Phoneme.Binding
 
         /// <inheritdoc />
         public override bool Equals(object obj) => obj is PhonemePeer && ((PhonemePeer)obj).GetHashCode() == GetHashCode();
+
+        internal void OnMessageRecieved(byte[] data) => MessageRecieved?.Invoke(this, data);
+
+        public event PeerMessageHandler MessageRecieved;
 
         public event PropertyChangedEventHandler PropertyChanged;
 

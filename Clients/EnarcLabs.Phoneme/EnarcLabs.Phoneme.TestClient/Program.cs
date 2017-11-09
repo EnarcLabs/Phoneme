@@ -42,7 +42,7 @@ namespace EnarcLabs.Phoneme.TestClient
                 while (true)
                 {
                     Console.WriteLine("Enter message:");
-                    client.KnownPeers[0].SendMessage(Encoding.ASCII.GetBytes(Console.ReadLine()));
+                    client.KnownPeers[0].SendMessage(Encoding.ASCII.GetBytes(Console.ReadLine() ?? "<null>"));
                 }
             }
         }

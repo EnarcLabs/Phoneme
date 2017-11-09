@@ -1,0 +1,44 @@
+﻿<Window x:Class="EnarcLabs.Phoneme.TestUI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:EnarcLabs.Phoneme.TestUI"
+        xmlns:binding="clr-namespace:EnarcLabs.Phoneme.Binding;assembly=EnarcLabs.Phoneme.Binding"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="350" Width="525"
+        d:DataContext="{d:DesignInstance local:MainUiModel}">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="3*"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <ListBox ItemsSource="{Binding Client.KnownPeers}" Grid.RowSpan="2" Grid.Row="0" Grid.Column="0">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="binding:PhonemePeer">
+                    <TextBlock Text="{Binding DisplayName, FallbackValue=Unknown}" ToolTip="{Binding EndPoint}"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" Grid.Column="1" Grid.Row="0">
+            <ItemsControl ItemsSource="{Binding Messages}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="local:PeerMessage">
+                        <StackPanel Orientation="Vertical" Margin="5">
+                            <TextBlock Padding="2" Text="{Binding Peer.DisplayName, FallbackValue=Unknown}" ToolTip="{Binding Peer.EndPoint}" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Text="{Binding MessageText}"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+        <DockPanel Grid.Row="1" Grid.Column="1">
+            <Button Content="Send" Padding="2" DockPanel.Dock="Right" Command="{Binding SendMessageCommand}" CommandParameter="{Binding Text, Source={x:Reference MessageBox}}" />
+            <TextBox Name="MessageBox" />
+        </DockPanel>
+    </Grid>
+</Window>
