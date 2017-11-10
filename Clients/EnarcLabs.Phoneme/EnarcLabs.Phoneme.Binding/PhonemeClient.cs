@@ -5,13 +5,8 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Web.UI;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Threading;
 using EnarcLabs.Phoneme.Binding.Security;
 using Image = System.Drawing.Image;
 
@@ -268,5 +263,11 @@ namespace EnarcLabs.Phoneme.Binding
 
         public event PeerJoinLeaveHandler PeerJoin;
         public event PeerJoinLeaveHandler PeerLeave;
+    }
+
+    internal enum BroadcastCommand
+    {
+        PeerAnnounce = 0,
+        PeerLeave = 1,
     }
 }

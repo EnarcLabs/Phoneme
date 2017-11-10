@@ -18,11 +18,15 @@ namespace EnarcLabs.Phoneme.Binding
         /// Shakes hands with the client to prove that you own a private key for your claimed public key.
         /// </summary>
         /// <param name="stream">The stream to handshake on.</param>
+        /// <param name="publicKey">The public key to transmit and verify.</param>
         /// <param name="privateKey">The private key to use for signing.</param>
-        public static void ProveIdentity(Stream stream, byte[] privateKey)
+        public static void ProveIdentity(Stream stream, byte[] publicKey, byte[] privateKey)
         {
             var rdr = new BinaryReader(stream);
             var wrt = new BinaryWriter(stream);
+
+            wrt.Write(publicKey.Length);
+            wrt.Write(publicKey);
 
             var sigGuid = rdr.ReadBytes(16);
             using (var rsa = OpenSslKey.DecodeRsaPrivateKey(privateKey))
