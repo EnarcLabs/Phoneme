@@ -210,7 +210,7 @@ namespace EnarcLabs.Phoneme.Binding
                 if(pubKey.Compare(PublicKey))
                     return;
 
-                var peer = new PhonemePeer(this, pubKey, remote);
+                var peer = new PhonemePeer(this, pubKey, new IPEndPoint(remote.Address, NetworkPort));
                 if (add)
                 {
                     if (!_knownPeersSet.Contains(peer))
