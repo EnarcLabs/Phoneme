@@ -36,8 +36,6 @@ namespace EnarcLabs.Phoneme.Binding
 
         public IPEndPoint EndPoint { get; }
 
-        //public BitmapSource ProfilePicture { get; }
-        
         internal PhonemePeer(PhonemeClient client, byte[] publicKey, IPEndPoint endPoint)
         {
             Client = client;
@@ -105,10 +103,7 @@ namespace EnarcLabs.Phoneme.Binding
                     var wrt = new BinaryWriter(stream);
                     wrt.Write((byte) PeerCommand.BinaryBlob);
 
-                    wrt.Write(Client.PublicKey.Length);
-                    wrt.Write(Client.PublicKey);
-
-                    GlobalHelpers.ProveIdentity(stream, Client.PrivateKey);
+                    GlobalHelpers.ProveIdentity(stream, Client.PublicKey, Client.PrivateKey);
                     GlobalHelpers.OneTimePad(messageData, Client.SymetricKey);
 
                     wrt.Write(messageData.Length);
