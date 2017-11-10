@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
@@ -10,11 +9,14 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
 using EnarcLabs.Phoneme.Binding.Security;
+using Image = System.Drawing.Image;
 
 namespace EnarcLabs.Phoneme.Binding
 {
-    public delegate void PeerJoinHandler(PhonemePeer peer);
+    public delegate void PeerJoinLeaveHandler(PhonemePeer peer);
 
     public class PhonemeClient : IDisposable
     {
@@ -86,6 +88,7 @@ namespace EnarcLabs.Phoneme.Binding
             using (var mem = new MemoryStream())
             {
                 var wrt = new BinaryWriter(mem);
+                wrt.Write(true); //New client added
                 wrt.Write(PublicKey.Length);
                 wrt.Write(PublicKey);
                 //This is not necessary
@@ -93,24 +96,7 @@ namespace EnarcLabs.Phoneme.Binding
                 //wrt.Write(_broadcastGuid.ToByteArray());
 
                 mem.Position = 0;
-                //Broadcast on every interface, not just the default one.
-                foreach (var multicastAddress in NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(x => x.OperationalStatus == OperationalStatus.Up && x.SupportsMulticast &&
-                                x.GetIPProperties().GetIPv4Properties() != null &&
-                                NetworkInterface.LoopbackInterfaceIndex !=
-                                x.GetIPProperties().GetIPv4Properties().Index)
-                    .SelectMany(x => x.GetIPProperties().UnicastAddresses).Select(x => x.Address)
-                    .Where(x => x.AddressFamily == AddressFamily.InterNetwork))
-                {
-                    using (var bClient = new UdpClient(new IPEndPoint(multicastAddress, 0)))
-                    {
-                        bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
-                        bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.DontRoute, 1);
-
-                        _udpClient.Send(mem.ToArray(), (int)mem.Length,
-                            new IPEndPoint(IPAddress.Broadcast, NetworkPort));
-                    }
-                }
+                GlobalHelpers.BroadcastPacket(mem.ToArray(), NetworkPort);
             }
         }
 
@@ -138,17 +124,9 @@ namespace EnarcLabs.Phoneme.Binding
                 {
                     case PeerCommand.Identify:
                     {
-                        var sigGuid = Guid.NewGuid();
-                        //Length is fixed - 16 bytes
-                        wrt.Write(sigGuid.ToByteArray());
-
-                        var pub = rdr.ReadBytes(rdr.ReadInt32());
-                        var sig = rdr.ReadBytes(rdr.ReadInt32());
-                        using (var rsa = OpenSslKey.DecodeX509PublicKey(pub))
-                        {
-                            if(!rsa.VerifyData(sigGuid.ToByteArray(), new SHA256CryptoServiceProvider(), sig))
-                                return;
-                        }
+                        byte[] pub;
+                        if(!GlobalHelpers.VerifyIdentity(stream, out pub))
+                            return;
 
                         var symGuid = rdr.ReadBytes(rdr.ReadInt32());
                         using (var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
@@ -183,17 +161,9 @@ namespace EnarcLabs.Phoneme.Binding
                     }
                     case PeerCommand.BinaryBlob:
                     {
-                        var sigGuid = Guid.NewGuid();
-                        //Length is fixed - 16 bytes
-                        wrt.Write(sigGuid.ToByteArray());
-
-                        var pub = rdr.ReadBytes(rdr.ReadInt32());
-                        var sig = rdr.ReadBytes(rdr.ReadInt32());
-                        using (var rsa = OpenSslKey.DecodeX509PublicKey(pub))
-                        {
-                            if (!rsa.VerifyData(sigGuid.ToByteArray(), new SHA256CryptoServiceProvider(), sig))
-                                return;
-                        }
+                        byte[] pub;
+                        if (!GlobalHelpers.VerifyIdentity(stream, out pub))
+                            return;
 
                         var peer = new PhonemePeer(this, pub, new IPEndPoint(((IPEndPoint) socket.RemoteEndPoint).Address, NetworkPort));
                         if (!_knownPeersSet.Contains(peer))
@@ -201,13 +171,7 @@ namespace EnarcLabs.Phoneme.Binding
                         peer = _knownPeersSet.First(x => x.Equals(peer));
 
                         var blob = rdr.ReadBytes(rdr.ReadInt32());
-                        unsafe
-                        {
-                            fixed (byte* key = SymetricKey.ToByteArray())
-                            fixed (byte* ptr = blob)
-                                for (var i = 0; i < blob.Length; i++)
-                                    ptr[i] ^= key[i % 16];
-                        }
+                        GlobalHelpers.OneTimePad(blob, SymetricKey);
 
                         peer.OnMessageRecieved(blob);
 
@@ -217,17 +181,6 @@ namespace EnarcLabs.Phoneme.Binding
                         throw new ArgumentOutOfRangeException();
                 }
             }
-        }
-
-        private static byte[] ReadAndVerifyPublicKey(Stream stream)
-        {
-            var bin = new BinaryReader(stream);
-
-            var sig = bin.ReadBytes(bin.ReadInt32());
-            var pubKey = bin.ReadBytes(bin.ReadInt32());
-
-            using (var rsa = OpenSslKey.DecodeX509PublicKey(pubKey))
-                return !rsa.VerifyData(pubKey, new SHA256CryptoServiceProvider(), sig) ? null : pubKey;
         }
 
         private void UdpRecieveLoop(IAsyncResult result)
@@ -251,29 +204,60 @@ namespace EnarcLabs.Phoneme.Binding
             using (var mem = new MemoryStream(data))
             {
                 var bin = new BinaryReader(mem);
+                var add = bin.ReadBoolean();
                 var pubKey = bin.ReadBytes(bin.ReadInt32());
 
-                //if(pubKey.Compare(PublicKey))
-                //    return;
+                if(pubKey.Compare(PublicKey))
+                    return;
 
                 var peer = new PhonemePeer(this, pubKey, remote);
-                if (!_knownPeersSet.Contains(peer))
+                if (add)
                 {
-                    _knownPeersSet.Add(peer);
-                    Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
-                    PeerJoin?.Invoke(peer);
+                    if (!_knownPeersSet.Contains(peer))
+                    {
+                        _knownPeersSet.Add(peer);
+                        Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
+                        PeerJoin?.Invoke(peer);
+                    }
+                    peer.PerformTcpHandshake();
                 }
-                peer.PerformTcpHandshake();
+                else
+                {
+                    if (!_knownPeersSet.Remove(peer)) return;
+
+                    var realPeer = KnownPeers.First(x => x.Equals(peer));
+                    Application.Current.Dispatcher.Invoke(() => KnownPeers.Remove(realPeer));
+                    PeerLeave?.Invoke(realPeer);
+                }
             }
 
         }
         
         public void Dispose()
         {
+            try
+            {
+                using (var mem = new MemoryStream())
+                {
+                    var wrt = new BinaryWriter(mem);
+                    wrt.Write(false); //Client is leaving.
+                    wrt.Write(PublicKey.Length);
+                    wrt.Write(PublicKey);
+
+                    mem.Position = 0;
+                    GlobalHelpers.BroadcastPacket(mem.ToArray(), NetworkPort);
+                }
+            }
+            catch
+            {
+                //Ignore this, we're dying anyway.
+            }
+
             _udpClient?.Close();
             _tcpListener?.Stop();
         }
 
-        public event PeerJoinHandler PeerJoin;
+        public event PeerJoinLeaveHandler PeerJoin;
+        public event PeerJoinLeaveHandler PeerLeave;
     }
 }

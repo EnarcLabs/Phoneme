@@ -102,28 +102,14 @@ namespace EnarcLabs.Phoneme.Binding
                 client.Connect(EndPoint);
                 using (var stream = client.GetStream())
                 {
-                    var rdr = new BinaryReader(stream);
                     var wrt = new BinaryWriter(stream);
                     wrt.Write((byte) PeerCommand.BinaryBlob);
 
                     wrt.Write(Client.PublicKey.Length);
                     wrt.Write(Client.PublicKey);
 
-                    var sigGuid = rdr.ReadBytes(16);
-                    using (var rsa = OpenSslKey.DecodeRsaPrivateKey(Client.PrivateKey))
-                    {
-                        var sig = rsa.SignData(sigGuid, new SHA256CryptoServiceProvider());
-                        wrt.Write(sig.Length);
-                        wrt.Write(sig);
-                    }
-
-                    unsafe
-                    {
-                        fixed (byte* key = Client.SymetricKey.ToByteArray())
-                        fixed (byte* ptr = messageData)
-                            for (var i = 0; i < messageData.Length; i++)
-                                ptr[i] ^= key[i % 16];
-                    }
+                    GlobalHelpers.ProveIdentity(stream, Client.PrivateKey);
+                    GlobalHelpers.OneTimePad(messageData, Client.SymetricKey);
 
                     wrt.Write(messageData.Length);
                     wrt.Write(messageData);
