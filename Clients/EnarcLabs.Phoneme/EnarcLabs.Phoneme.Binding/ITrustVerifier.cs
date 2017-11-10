@@ -34,8 +34,15 @@ namespace EnarcLabs.Phoneme.Binding
 
         public bool VerifyTrust(byte[] publicKey)
         {
-            var pem = new PemFile();
-            return Directory.EnumerateFiles(FilePath).Any(file => pem.ReadFile(file) && pem.Key.Compare(publicKey));
+            try
+            {
+                var pem = new PemFile();
+                return Directory.EnumerateFiles(FilePath).Any(file => pem.ReadFile(file) && pem.Key.Compare(publicKey));
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }

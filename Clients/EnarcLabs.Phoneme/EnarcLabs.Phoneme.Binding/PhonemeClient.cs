@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
@@ -199,42 +200,49 @@ namespace EnarcLabs.Phoneme.Binding
                 return;
             }
 
-            IPEndPoint remote = null;
-            var data = _udpClient.EndReceive(result, ref remote);
-
-            if (remote == null || data == null || data.Length == 0)
-                return;
-
-            using (var mem = new MemoryStream(data))
+            try
             {
-                var bin = new BinaryReader(mem);
-                var add = bin.ReadBoolean();
-                var pubKey = bin.ReadBytes(bin.ReadInt32());
+                IPEndPoint remote = null;
+                var data = _udpClient.EndReceive(result, ref remote);
 
-                if(pubKey.Compare(PublicKey) || !TrustVerifier.VerifyTrust(pubKey))
+                if (remote == null || data == null || data.Length == 0)
                     return;
 
-                var peer = new PhonemePeer(this, pubKey, new IPEndPoint(remote.Address, NetworkPort));
-                if (add)
+                using (var mem = new MemoryStream(data))
                 {
-                    if (!_knownPeersSet.Contains(peer))
-                    {
-                        _knownPeersSet.Add(peer);
-                        Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
-                        PeerJoin?.Invoke(peer);
-                    }
-                    peer.PerformTcpHandshake();
-                }
-                else
-                {
-                    if (!_knownPeersSet.Remove(peer)) return;
+                    var bin = new BinaryReader(mem);
+                    var add = bin.ReadBoolean();
+                    var pubKey = bin.ReadBytes(bin.ReadInt32());
 
-                    var realPeer = KnownPeers.First(x => x.Equals(peer));
-                    Application.Current.Dispatcher.Invoke(() => KnownPeers.Remove(realPeer));
-                    PeerLeave?.Invoke(realPeer);
+                    if (pubKey.Compare(PublicKey) || !TrustVerifier.VerifyTrust(pubKey))
+                        return;
+
+                    var peer = new PhonemePeer(this, pubKey, new IPEndPoint(remote.Address, NetworkPort));
+                    if (add)
+                    {
+                        if (!_knownPeersSet.Contains(peer))
+                        {
+                            _knownPeersSet.Add(peer);
+                            Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
+                            PeerJoin?.Invoke(peer);
+                        }
+                        peer.PerformTcpHandshake();
+                    }
+                    else
+                    {
+                        if (!_knownPeersSet.Remove(peer)) return;
+
+                        var realPeer = KnownPeers.First(x => x.Equals(peer));
+                        Application.Current.Dispatcher.Invoke(() => KnownPeers.Remove(realPeer));
+                        PeerLeave?.Invoke(realPeer);
+                    }
                 }
             }
-
+            catch (Exception e)
+            {
+                //Some kind of noise? Ignore this.
+                Debug.WriteLine(e);
+            }
         }
         
         public void Dispose()

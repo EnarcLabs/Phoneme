@@ -21,8 +21,8 @@ namespace EnarcLabs.Phoneme.Binding
 
         public bool ReadFile(string path)
         {
-            var match = Regex.Matches(File.ReadAllText(path), @"-----BEGIN (?<header>[\w\s]+) KEY-----\n(?<key>[\s\S]*)\n-----END \1 KEY-----",
-                RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            var match = Regex.Matches(File.ReadAllText(path), @"-----BEGIN (?<header>[\w\s]+) KEY-----\r?\n(?<key>[\s\S]*)\r?\n-----END \1 KEY-----",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
             if (match.Count < 1)
                 return false;
             Type = match[0].Groups["header"].Value;

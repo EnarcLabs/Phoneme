@@ -32,7 +32,7 @@ namespace EnarcLabs.Phoneme.TestUI
             var pubKey = new PemFile();
             pubKey.ReadFile(Environment.GetCommandLineArgs()[1]);
             var privKey = new PemFile();
-            privKey.ReadFile(Environment.GetCommandLineArgs()[1]);
+            privKey.ReadFile(Environment.GetCommandLineArgs()[2]);
 
             Messages = new ObservableCollection<PeerMessage>();
             Client = new PhonemeClient(6969, pubKey.Key, privKey.Key, new DirectoryTrustVerifier(Path.GetFullPath("TrustedKeys")), Dns.GetHostName());
