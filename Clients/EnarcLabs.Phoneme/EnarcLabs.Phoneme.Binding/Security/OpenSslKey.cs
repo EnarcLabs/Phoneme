@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 
 namespace EnarcLabs.Phoneme.Binding.Security
 {
-    public class OpenSslKey
+    internal class OpenSslKey
     {
         public static RSACryptoServiceProvider DecodeX509PublicKey(byte[] x509Key)
         {

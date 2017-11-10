@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Web.UI;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -43,15 +44,22 @@ namespace EnarcLabs.Phoneme.Binding
         /// </summary>
         public int NetworkPort { get; }
 
+        /// <summary>
+        /// Used to allow or deny entry into the mesh network.
+        /// </summary>
+        public ITrustVerifier TrustVerifier { get; }
+
         private readonly HashSet<PhonemePeer> _knownPeersSet;
         public ObservableCollection<PhonemePeer> KnownPeers { get; }
 
-        public PhonemeClient(int networkPort, byte[] publicKey, byte[] privateKey, string displayName = null, byte[] profilePicture = null)
+        public PhonemeClient(int networkPort, byte[] publicKey, byte[] privateKey, ITrustVerifier trustVerifier, string displayName = null, byte[] profilePicture = null)
         {
             if(publicKey == null)
                 throw new ArgumentNullException(nameof(publicKey));
             if(privateKey == null)
                 throw new ArgumentNullException(nameof(privateKey));
+            if(trustVerifier == null)
+                throw new ArgumentNullException(nameof(trustVerifier));
 
             _udpClient = new UdpClient(networkPort, AddressFamily.InterNetwork)
             {
@@ -65,6 +73,7 @@ namespace EnarcLabs.Phoneme.Binding
             PublicKey = publicKey;
             PrivateKey = privateKey;
             DisplayName = displayName;
+            TrustVerifier = trustVerifier;
 
             if (profilePicture == null) return;
 
@@ -207,7 +216,7 @@ namespace EnarcLabs.Phoneme.Binding
                 var add = bin.ReadBoolean();
                 var pubKey = bin.ReadBytes(bin.ReadInt32());
 
-                if(pubKey.Compare(PublicKey))
+                if(pubKey.Compare(PublicKey) || !TrustVerifier.VerifyTrust(pubKey))
                     return;
 
                 var peer = new PhonemePeer(this, pubKey, new IPEndPoint(remote.Address, NetworkPort));
