@@ -8,6 +8,9 @@
         mc:Ignorable="d"
         Title="MainWindow" Height="350" Width="525"
         d:DataContext="{d:DesignInstance local:MainUiModel}">
+    <Window.InputBindings>
+        <KeyBinding Key="Enter" CommandParameter="{Binding Text, Source={x:Reference MessageBox}}" Command="{Binding SendMessageCommand}"/>
+    </Window.InputBindings>
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
@@ -24,13 +27,34 @@
                 </DataTemplate>
             </ListBox.ItemTemplate>
         </ListBox>
-        <ScrollViewer HorizontalScrollBarVisibility="Disabled" Grid.Column="1" Grid.Row="0">
-            <ItemsControl ItemsSource="{Binding Messages}">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" Grid.Column="1" Grid.Row="0" VerticalContentAlignment="Bottom"> 
+            <ItemsControl ItemsSource="{Binding Messages}" VerticalAlignment="Bottom">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="local:PeerMessage">
                         <StackPanel Orientation="Vertical" Margin="5">
-                            <TextBlock Padding="2" Text="{Binding Peer.DisplayName, FallbackValue=Unknown}" ToolTip="{Binding Peer.EndPoint}" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Padding="2" ToolTip="{Binding Peer.EndPoint}" Foreground="Gray" FontSize="10">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{Binding Peer.DisplayName}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Peer}" Value="{x:Null}">
+                                                <Setter Property="Text" Value="You"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                             <TextBlock Text="{Binding MessageText}"/>
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="HorizontalAlignment" Value="Left"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Peer}" Value="{x:Null}">
+                                            <Setter Property="HorizontalAlignment" Value="Right"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
                         </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>

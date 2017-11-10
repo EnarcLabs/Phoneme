@@ -18,6 +18,7 @@ namespace EnarcLabs.Phoneme.Binding
 
     public class PhonemeClient : IDisposable
     {
+        internal Guid SymetricKey = Guid.Empty;
         private readonly UdpClient _udpClient;
         private readonly TcpListener _tcpListener;
 
@@ -82,36 +83,32 @@ namespace EnarcLabs.Phoneme.Binding
             _tcpListener.Start();
             _tcpListener.BeginAcceptSocket(TcpAcceptLoop, null);
 
-            using (var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
+            using (var mem = new MemoryStream())
             {
-                var sig = rsa.SignData(PublicKey, new SHA256CryptoServiceProvider());
+                var wrt = new BinaryWriter(mem);
+                wrt.Write(PublicKey.Length);
+                wrt.Write(PublicKey);
+                //This is not necessary
+                //Length is a fixed 16 bytes
+                //wrt.Write(_broadcastGuid.ToByteArray());
 
-                using (var mem = new MemoryStream())
+                mem.Position = 0;
+                //Broadcast on every interface, not just the default one.
+                foreach (var multicastAddress in NetworkInterface.GetAllNetworkInterfaces()
+                    .Where(x => x.OperationalStatus == OperationalStatus.Up && x.SupportsMulticast &&
+                                x.GetIPProperties().GetIPv4Properties() != null &&
+                                NetworkInterface.LoopbackInterfaceIndex !=
+                                x.GetIPProperties().GetIPv4Properties().Index)
+                    .SelectMany(x => x.GetIPProperties().UnicastAddresses).Select(x => x.Address)
+                    .Where(x => x.AddressFamily == AddressFamily.InterNetwork))
                 {
-                    var bin = new BinaryWriter(mem);
-                    bin.Write(sig.Length);
-                    bin.Write(sig);
-                    bin.Write(PublicKey.Length);
-                    bin.Write(PublicKey);
-
-                    mem.Position = 0;
-                    //Broadcast on every interface, not just the default one.
-                    foreach (var multicastAddress in NetworkInterface.GetAllNetworkInterfaces()
-                        .Where(x => x.OperationalStatus == OperationalStatus.Up && x.SupportsMulticast &&
-                                    x.GetIPProperties().GetIPv4Properties() != null &&
-                                    NetworkInterface.LoopbackInterfaceIndex !=
-                                    x.GetIPProperties().GetIPv4Properties().Index)
-                        .SelectMany(x => x.GetIPProperties().UnicastAddresses).Select(x => x.Address)
-                        .Where(x => x.AddressFamily == AddressFamily.InterNetwork))
+                    using (var bClient = new UdpClient(new IPEndPoint(multicastAddress, 0)))
                     {
-                        using (var bClient = new UdpClient(new IPEndPoint(multicastAddress, 0)))
-                        {
-                            bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
-                            bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.DontRoute, 1);
+                        bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+                        bClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.DontRoute, 1);
 
-                            _udpClient.Send(mem.ToArray(), (int) mem.Length,
-                                new IPEndPoint(IPAddress.Broadcast, NetworkPort));
-                        }
+                        _udpClient.Send(mem.ToArray(), (int)mem.Length,
+                            new IPEndPoint(IPAddress.Broadcast, NetworkPort));
                     }
                 }
             }
@@ -132,19 +129,36 @@ namespace EnarcLabs.Phoneme.Binding
             using (var socket = _tcpListener.EndAcceptSocket(result))
             using (var stream = new NetworkStream(socket))
             {
+                if (!(socket.RemoteEndPoint is IPEndPoint))
+                    return;
+
                 var rdr = new BinaryReader(stream);
                 var wrt = new BinaryWriter(stream);
                 switch ((PeerCommand)rdr.ReadByte())
                 {
                     case PeerCommand.Identify:
                     {
-                        var pub = ReadAndVerifyPublicKey(stream);
-                        if(pub == null)
-                            return;
-                        var peer = new PhonemePeer(this, pub, new IPEndPoint((socket.RemoteEndPoint as IPEndPoint).Address, NetworkPort));
+                        var sigGuid = Guid.NewGuid();
+                        //Length is fixed - 16 bytes
+                        wrt.Write(sigGuid.ToByteArray());
+
+                        var pub = rdr.ReadBytes(rdr.ReadInt32());
+                        var sig = rdr.ReadBytes(rdr.ReadInt32());
+                        using (var rsa = OpenSslKey.DecodeX509PublicKey(pub))
+                        {
+                            if(!rsa.VerifyData(sigGuid.ToByteArray(), new SHA256CryptoServiceProvider(), sig))
+                                return;
+                        }
+
+                        var symGuid = rdr.ReadBytes(rdr.ReadInt32());
+                        using (var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
+                            SymetricKey = new Guid(rsa.Decrypt(symGuid, false));
+
+                        var peer = new PhonemePeer(this, pub, new IPEndPoint(((IPEndPoint)socket.RemoteEndPoint).Address, NetworkPort));
                         if (!_knownPeersSet.Contains(peer))
                         {
                             _knownPeersSet.Add(peer);
+                            //TODO: Remove this dependency
                             Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
                             PeerJoin?.Invoke(peer);
                         }else
@@ -169,18 +183,33 @@ namespace EnarcLabs.Phoneme.Binding
                     }
                     case PeerCommand.BinaryBlob:
                     {
-                        var pub = ReadAndVerifyPublicKey(stream);
-                        if (pub == null)
-                            return;
+                        var sigGuid = Guid.NewGuid();
+                        //Length is fixed - 16 bytes
+                        wrt.Write(sigGuid.ToByteArray());
 
-                        var peer = new PhonemePeer(this, pub, new IPEndPoint((socket.RemoteEndPoint as IPEndPoint).Address, NetworkPort));
+                        var pub = rdr.ReadBytes(rdr.ReadInt32());
+                        var sig = rdr.ReadBytes(rdr.ReadInt32());
+                        using (var rsa = OpenSslKey.DecodeX509PublicKey(pub))
+                        {
+                            if (!rsa.VerifyData(sigGuid.ToByteArray(), new SHA256CryptoServiceProvider(), sig))
+                                return;
+                        }
+
+                        var peer = new PhonemePeer(this, pub, new IPEndPoint(((IPEndPoint) socket.RemoteEndPoint).Address, NetworkPort));
                         if (!_knownPeersSet.Contains(peer))
                             return;
-                        peer = _knownPeersSet.First(x => x.GetHashCode() == peer.GetHashCode());
+                        peer = _knownPeersSet.First(x => x.Equals(peer));
 
                         var blob = rdr.ReadBytes(rdr.ReadInt32());
-                        using (var rsa = OpenSslKey.DecodeRsaPrivateKey(PrivateKey))
-                            peer.OnMessageRecieved(rsa.Decrypt(blob, false));
+                        unsafe
+                        {
+                            fixed (byte* key = SymetricKey.ToByteArray())
+                            fixed (byte* ptr = blob)
+                                for (var i = 0; i < blob.Length; i++)
+                                    ptr[i] ^= key[i % 16];
+                        }
+
+                        peer.OnMessageRecieved(blob);
 
                         break;
                     }
@@ -222,25 +251,19 @@ namespace EnarcLabs.Phoneme.Binding
             using (var mem = new MemoryStream(data))
             {
                 var bin = new BinaryReader(mem);
-                var sig = bin.ReadBytes(bin.ReadInt32());
                 var pubKey = bin.ReadBytes(bin.ReadInt32());
 
-                using (var rsa = OpenSslKey.DecodeX509PublicKey(pubKey))
+                //if(pubKey.Compare(PublicKey))
+                //    return;
+
+                var peer = new PhonemePeer(this, pubKey, remote);
+                if (!_knownPeersSet.Contains(peer))
                 {
-                    if (!rsa.VerifyData(pubKey, new SHA256CryptoServiceProvider(), sig)) return;
-
-                    if(pubKey.Compare(PublicKey))
-                        return;
-
-                    var peer = new PhonemePeer(this, pubKey, remote);
-                    if (!_knownPeersSet.Contains(peer))
-                    {
-                        _knownPeersSet.Add(peer);
-                        Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
-                        PeerJoin?.Invoke(peer);
-                    }
-                    peer.PerformTcpHandshake();
+                    _knownPeersSet.Add(peer);
+                    Application.Current.Dispatcher.Invoke(() => KnownPeers.Add(peer));
+                    PeerJoin?.Invoke(peer);
                 }
+                peer.PerformTcpHandshake();
             }
 
         }

@@ -67,6 +67,8 @@ namespace EnarcLabs.Phoneme.TestUI
 
                 foreach (var peer in _model.Client.KnownPeers)
                     peer.SendMessage(Encoding.ASCII.GetBytes(str));
+
+                _model.Messages.Add(new PeerMessage(null, str));
             }
 
             public event EventHandler CanExecuteChanged;

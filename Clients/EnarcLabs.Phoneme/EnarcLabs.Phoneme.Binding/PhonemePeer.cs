@@ -47,6 +47,9 @@ namespace EnarcLabs.Phoneme.Binding
 
         internal void PerformTcpHandshake()
         {
+            if (Client.SymetricKey == Guid.Empty)
+                Client.SymetricKey = Guid.NewGuid();
+
             using (var client = new TcpClient())
             {
                 client.Connect(EndPoint);
@@ -56,7 +59,23 @@ namespace EnarcLabs.Phoneme.Binding
                     var wrt = new BinaryWriter(stream);
                     wrt.Write((byte)PeerCommand.Identify);
 
-                    WriteSignedPublicKey(stream);
+                    wrt.Write(Client.PublicKey.Length);
+                    wrt.Write(Client.PublicKey);
+
+                    var sigGuid = rdr.ReadBytes(16);
+                    using (var rsa = OpenSslKey.DecodeRsaPrivateKey(Client.PrivateKey))
+                    {
+                        var sig = rsa.SignData(sigGuid, new SHA256CryptoServiceProvider());
+                        wrt.Write(sig.Length);
+                        wrt.Write(sig);
+                    }
+
+                    using (var rsa = OpenSslKey.DecodeX509PublicKey(PublicKey))
+                    {
+                        var encSym = rsa.Encrypt(Client.SymetricKey.ToByteArray(), false);
+                        wrt.Write(encSym.Length);
+                        wrt.Write(encSym);
+                    }
 
                     wrt.Write(Client.DisplayName != null);
                     if(Client.DisplayName != null)
@@ -83,32 +102,32 @@ namespace EnarcLabs.Phoneme.Binding
                 client.Connect(EndPoint);
                 using (var stream = client.GetStream())
                 {
-                    var bin = new BinaryWriter(stream);
-                    bin.Write((byte) PeerCommand.BinaryBlob);
+                    var rdr = new BinaryReader(stream);
+                    var wrt = new BinaryWriter(stream);
+                    wrt.Write((byte) PeerCommand.BinaryBlob);
 
-                    WriteSignedPublicKey(stream);
+                    wrt.Write(Client.PublicKey.Length);
+                    wrt.Write(Client.PublicKey);
 
-                    using (var rsa = OpenSslKey.DecodeX509PublicKey(PublicKey))
+                    var sigGuid = rdr.ReadBytes(16);
+                    using (var rsa = OpenSslKey.DecodeRsaPrivateKey(Client.PrivateKey))
                     {
-                        var data = rsa.Encrypt(messageData, false);
-                        bin.Write(data.Length);
-                        bin.Write(data);
+                        var sig = rsa.SignData(sigGuid, new SHA256CryptoServiceProvider());
+                        wrt.Write(sig.Length);
+                        wrt.Write(sig);
                     }
+
+                    unsafe
+                    {
+                        fixed (byte* key = Client.SymetricKey.ToByteArray())
+                        fixed (byte* ptr = messageData)
+                            for (var i = 0; i < messageData.Length; i++)
+                                ptr[i] ^= key[i % 16];
+                    }
+
+                    wrt.Write(messageData.Length);
+                    wrt.Write(messageData);
                 }
-            }
-        }
-
-        private void WriteSignedPublicKey(Stream output)
-        {
-            var bin = new BinaryWriter(output);
-
-            using (var rsa = OpenSslKey.DecodeRsaPrivateKey(Client.PrivateKey))
-            {
-                var sig = rsa.SignData(Client.PublicKey, new SHA256CryptoServiceProvider());
-                bin.Write(sig.Length);
-                bin.Write(sig);
-                bin.Write(Client.PublicKey.Length);
-                bin.Write(Client.PublicKey);
             }
         }
 
