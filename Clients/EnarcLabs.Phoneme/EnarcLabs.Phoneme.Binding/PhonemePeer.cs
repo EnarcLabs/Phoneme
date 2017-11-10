@@ -116,7 +116,7 @@ namespace EnarcLabs.Phoneme.Binding
         public override int GetHashCode() => Convert.ToBase64String(PublicKey).GetHashCode();
 
         /// <inheritdoc />
-        public override bool Equals(object obj) => obj is PhonemePeer && ((PhonemePeer)obj).GetHashCode() == GetHashCode();
+        public override bool Equals(object obj) => obj is PhonemePeer && ((PhonemePeer) obj).PublicKey.Compare(PublicKey);
 
         internal void OnMessageRecieved(byte[] data) => MessageRecieved?.Invoke(this, data);
 
